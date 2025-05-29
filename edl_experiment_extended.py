@@ -1,7 +1,7 @@
 # -------------------- edl_experiment_extended.py --------------------
 """
-Extended EDL Experiment – exploiting ecosim v1.4 capabilities
-==============================================================
+Extended EDL Experiment – exploiting ecosim v1.5 / v1.4 capabilities
+=====================================================================
 
 Conditions (100 actors, 120 periods, density 0.08)
 
@@ -11,7 +11,7 @@ Conditions (100 actors, 120 periods, density 0.08)
 4. Enable-All                    – full model: types, negativity, boosts,
                                    adaptive ρ, tipping
 
-Common parameters for *all* runs
+Common parameters for all runs
     γ = 0.08, λ = 0.05, R_cap = 10.0, α = 0.05, β = 0.025
 
 Outputs
@@ -23,13 +23,17 @@ Figures: value_trajectories.png, component_decomposition.png, delta_plot.png,
          rho_volatility.png
 """
 # -------------------------------------------------------------------
-import json, itertools
+import json
 from pathlib import Path
-import matplotlib.pyplot as plt; plt.style.use("seaborn-v0_8-muted")
-import numpy as np, pandas as pd, seaborn as sns
+
+import matplotlib.pyplot as plt
+plt.style.use("seaborn-v0_8-muted")
+import numpy as np
+import pandas as pd
+import seaborn as sns
 from scipy import stats
 
-import ecosim            # must be v1.4+
+import ecosim                                  # v1.4+ or v1.5
 # -------------------------------------------------------------------
 OUT = Path(".")
 
@@ -51,17 +55,16 @@ CONDITIONS = {
 
 # -------------------- helper functions -------------------------------------
 def run_condition(label, extra_opts):
-    df = ecosim.run_simulation(**COMMON, **extra_opts,
-                               enable_diagnostics=True)
+    df = ecosim.run_simulation(**COMMON, **extra_opts, enable_diagnostics=True)
     df["group"] = label
     return df
 
 def summarise(df):
     g = (df.groupby(["group", "time"])
-           [["operand_value", "operant_value",
-             "orchestrant_value", "total_value"]]
-           .agg(["mean", "std"])
-           .reset_index())
+            [["operand_value", "operant_value",
+              "orchestrant_value", "total_value"]]
+            .agg(["mean", "std"])
+            .reset_index())
     g.columns = ["_".join(c).rstrip("_") if isinstance(c, tuple) else c
                  for c in g.columns]
     for comp in ["operand", "operant", "orchestrant", "total"]:
@@ -92,7 +95,7 @@ for g in CONDITIONS:
     effect_rows.append({"comparison": f"{g} vs Control", "cohens_d": d})
 pd.DataFrame(effect_rows).to_csv(OUT / "effect_sizes.csv", index=False)
 
-# -------------------- 3. externality map (pivot_table avoids duplicates) ----
+# -------------------- 3. externality map (robust pivot) ---------------------
 ext_map = (
     df_all.pivot_table(index=["group", "actor_id"],
                        columns="time",
@@ -100,10 +103,14 @@ ext_map = (
                        aggfunc="mean")
 )
 ext_map.index = [f"{g}-{aid}" for g, aid in ext_map.index]
+
+# ensure uniqueness
+assert ext_map.index.is_unique, "Externality map index is not unique."
+
 ext_map.to_csv(OUT / "externality_map.csv")
 
 # -------------------- 4. ANOVA & component shares ---------------------------
-samples = [final.loc[final["group"] == g, "total_value"] for g in CONDITIONS]
+samples = [final[final["group"] == g]["total_value"] for g in CONDITIONS]
 F_stat, p_val = stats.f_oneway(*samples)
 
 share = (
@@ -126,7 +133,7 @@ vol_track = (df_all.groupby("time")["volatility"].mean()
 # -------------------- 5. plotting ------------------------------------------
 palette = sns.color_palette("Set2", len(CONDITIONS))
 
-# total value trajectories
+# value trajectories
 plt.figure(figsize=(7.1, 4.5))
 for col, g in zip(palette, CONDITIONS):
     s = stats_df[stats_df["group"] == g]
@@ -142,11 +149,13 @@ fig, axs = plt.subplots(1, len(CONDITIONS),
 colors = ["#1f77b4", "#2ca02c", "#ff7f0e"]
 for ax, (g, col) in zip(axs, zip(CONDITIONS, palette)):
     s = stats_df[stats_df["group"] == g]
-    ax.stackplot(s["time"],
-                 s["operand_value_mean"],
-                 s["operant_value_mean"],
-                 s["orchestrant_value_mean"],
-                 colors=colors, alpha=0.9)
+    ax.stackplot(
+        s["time"],
+        s["operand_value_mean"],
+        s["operant_value_mean"],
+        s["orchestrant_value_mean"],
+        colors=colors, alpha=0.9
+    )
     ax.set_title(g); ax.set_xlabel("Time")
 axs[0].set_ylabel("Mean Component Value")
 axs[0].legend(["Operand", "Operant", "Orchestrant"], loc="upper left")
@@ -154,13 +163,13 @@ fig.tight_layout()
 fig.savefig(OUT / "component_decomposition.png", dpi=300)
 plt.close(fig)
 
-# delta vs control plot
-ctrl = stats_df[stats_df["group"] == "Baseline-Control"].set_index("time")
+# delta vs control
+ctrl_line = stats_df[stats_df["group"] == "Baseline-Control"].set_index("time")
 plt.figure(figsize=(7.1, 4.5))
 for g, col in zip([k for k in CONDITIONS if k != "Baseline-Control"],
                   palette[1:]):
     s = stats_df[stats_df["group"] == g].set_index("time")
-    delta = s["total_value_mean"] - ctrl["total_value_mean"]
+    delta = s["total_value_mean"] - ctrl_line["total_value_mean"]
     plt.plot(delta.index, delta, label=f"{g}−Control",
              linewidth=2, color=col)
 plt.xlabel("Time"); plt.ylabel("Δ Mean Value")
@@ -174,7 +183,7 @@ sns.violinplot(data=final, x="group", y="total_value",
 plt.ylabel("Final V_i(T)"); plt.tight_layout()
 plt.savefig(OUT / "violin_plot.png", dpi=300); plt.close()
 
-# externality heat-map
+# externality heatmap
 plt.figure(figsize=(8, 6))
 sns.heatmap(ext_map, cmap="coolwarm", center=0,
             cbar_kws={"label": "Ext received"})
@@ -182,7 +191,7 @@ plt.xlabel("Time"); plt.ylabel("Group-Actor")
 plt.title("Externality Heat-map"); plt.tight_layout()
 plt.savefig(OUT / "externality_heatmap.png", dpi=300); plt.close()
 
-# scatter / box per actor type (if types enabled)
+# actor type scatter/box
 if type_means is not None:
     plt.figure(figsize=(7.1, 4.5))
     sns.boxplot(data=final, x="actor_type", y="total_value",
@@ -190,7 +199,7 @@ if type_means is not None:
     plt.title("Actor Type vs Final Value"); plt.tight_layout()
     plt.savefig(OUT / "actor_type_scatter.png", dpi=300); plt.close()
 
-# rho & volatility time series
+# rho & volatility
 if rho_track is not None:
     fig, ax1 = plt.subplots(figsize=(7.1, 4.5))
     ax1.plot(rho_track.index, rho_track, label="ρ_t", color="navy")
