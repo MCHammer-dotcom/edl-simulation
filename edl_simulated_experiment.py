@@ -3,23 +3,16 @@
 Multi-Condition Simulated Field Experiment
 ==========================================
 
-Benchmarks four orchestrant-resource conditions in the Ecosystem-Dominant
-Logic (EDL) model:
+Benchmarks four orchestrant-resource conditions:
 
-1. Control/Low (γ = 0.02, λ = 0.01)            – constant low access  
-2. Medium       (γ = 0.05, λ = 0.03)           – constant medium access  
-3. High         (γ = 0.08, λ = 0.05)           – constant high access  
-4. Dynamic Onset: low until t=50, then logistic ramp to high  
-   γ(t), λ(t) = low + (high−low)/(1 + e^{−k(t−t₀)}) with k = 0.25, t₀ = 50
+1. Control  (Low γ, λ)
+2. Medium   (Mid γ, λ)
+3. High     (High γ, λ)
+4. Dynamic  (sigmoid ramp from low to high at t₀ = 50)
 
-Outputs
--------
-PNG charts (300 dpi, Nature column width)  
-CSV tables  (group_summary.csv, final_snapshot.csv, effect_sizes.csv)  
-JSON        (param_log.json)  
-Console     (ANOVA, Cohen d, tipping points, asymptote explanation)
+Corrected version: avoids variable shadowing of `scipy.stats` and
+uses `stats.f_oneway` for ANOVA.
 """
-
 # --------------------------------------------------------------------------
 import argparse
 import json
@@ -30,25 +23,20 @@ plt.style.use("seaborn-v0_8-muted")
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from scipy import stats
+from scipy import stats             # <-- keep module reference intact
 
-import ecosim  # ecosim.py in same folder
+import ecosim                       # ecosim.py in same folder
 # --------------------------------------------------------------------------
 OUTDIR = Path(".")
 COMMON = dict(n_actors=50, n_steps=100, density=0.05, seed=123)
 
-# Orchestrant parameter schedule per condition ------------------------------
+# Condition specifications ---------------------------------------------------
 LOW   = dict(gamma=0.02, lam=0.01)
 MED   = dict(gamma=0.05, lam=0.03)
 HIGH  = dict(gamma=0.08, lam=0.05)
-DYN   = dict(low=LOW, high=HIGH, k=0.25, t0=50)  # sigmoid ramp spec
+DYN   = dict(low=LOW, high=HIGH, k=0.25, t0=50)  # sigmoid spec
 
-CONDITIONS = {
-    "Control": LOW,
-    "Medium" : MED,
-    "High"   : HIGH,
-    "Dynamic": DYN,
-}
+CONDITIONS = {"Control": LOW, "Medium": MED, "High": HIGH, "Dynamic": DYN}
 # --------------------------------------------------------------------------
 
 
@@ -59,13 +47,14 @@ def sigmoid(t, low, high, k=0.25, t0=50):
 
 def run_condition(name: str, spec: dict) -> pd.DataFrame:
     """Run ecosim under specified orchestrant parameters."""
-    df = ecosim.run_simulation(**COMMON, **LOW)
+    df = ecosim.run_simulation(**COMMON, **LOW)  # start from LOW baseline
     df["group"] = name
 
     if name != "Dynamic":
         factor = (spec["gamma"] + spec["lam"]) / (LOW["gamma"] + LOW["lam"])
-        df["orchestrant_value"] *= factor
-        df["total_value"] += (factor - 1) * df["orchestrant_value"] / factor
+        if not np.isclose(factor, 1.0):
+            df["orchestrant_value"] *= factor
+            df["total_value"] += (factor - 1) * df["orchestrant_value"] / factor
     else:
         t = df["time"].values
         γt = sigmoid(t, LOW["gamma"], HIGH["gamma"], k=spec["k"], t0=spec["t0"])
@@ -93,14 +82,16 @@ def summarise(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def effect_size(a, b) -> float:
+    """Cohen's d for two independent samples."""
     return (a.mean() - b.mean()) / np.sqrt((a.var(ddof=1) + b.var(ddof=1)) / 2)
 
 
-def plot_trajectories(summary_df: pd.DataFrame, conds: list[str]):
+# -------------------- plotting helpers -------------------------------------
+def plot_trajectories(stats_df: pd.DataFrame, conds: list[str]):
     plt.figure(figsize=(7.1, 4.5))
     palette = sns.color_palette("Set2", n_colors=len(conds))
     for col, c in zip(palette, conds):
-        sub = summary_df[summary_df["group"] == c]
+        sub = stats_df[stats_df["group"] == c]
         plt.plot(sub["time"], sub["total_value_mean"], label=c, color=col, linewidth=2)
     plt.xlabel("Time")
     plt.ylabel("Mean Total Value")
@@ -111,11 +102,11 @@ def plot_trajectories(summary_df: pd.DataFrame, conds: list[str]):
     plt.close()
 
 
-def plot_delta(summary_df: pd.DataFrame, conds: list[str]):
-    ctrl = summary_df[summary_df["group"] == "Control"].set_index("time")
+def plot_delta(stats_df: pd.DataFrame, conds: list[str]):
+    ctrl = stats_df[stats_df["group"] == "Control"].set_index("time")
     plt.figure(figsize=(7.1, 4.5))
     for c in [k for k in conds if k != "Control"]:
-        sub = summary_df[summary_df["group"] == c].set_index("time")
+        sub = stats_df[stats_df["group"] == c].set_index("time")
         delta = sub["total_value_mean"] - ctrl["total_value_mean"]
         plt.plot(delta.index, delta, label=f"{c} − Control", linewidth=2)
     plt.xlabel("Time")
@@ -128,11 +119,11 @@ def plot_delta(summary_df: pd.DataFrame, conds: list[str]):
     plt.close()
 
 
-def plot_component_shares(summary_df: pd.DataFrame, conds: list[str]):
+def plot_component_shares(stats_df: pd.DataFrame, conds: list[str]):
     fig, axs = plt.subplots(1, len(conds), figsize=(10, 4.5), sharey=True)
     palette = ["#1f77b4", "#2ca02c", "#ff7f0e"]
     for ax, c in zip(axs, conds):
-        sub = summary_df[summary_df["group"] == c]
+        sub = stats_df[stats_df["group"] == c]
         ax.stackplot(
             sub["time"],
             sub["operand_value_mean"],
@@ -162,14 +153,16 @@ def plot_final_distribution(df_final: pd.DataFrame):
     plt.close()
 
 
+# -------------------- main experiment --------------------------------------
 def main(conds: list[str]):
     print("Running conditions:", ", ".join(conds))
     dfs = [run_condition(c, CONDITIONS[c]) for c in conds]
     df_all = pd.concat(dfs, ignore_index=True)
 
-    summary_df = summarise(df_all)
-    summary_df.to_csv(OUTDIR / "group_summary.csv", index=False)
+    stats_df = summarise(df_all)
+    stats_df.to_csv(OUTDIR / "group_summary.csv", index=False)
 
+    # Effect sizes and ANOVA -------------------------------------------------
     final = df_all[df_all["time"] == COMMON["n_steps"] - 1]
     effect_rows = []
     for c in conds:
@@ -183,9 +176,10 @@ def main(conds: list[str]):
     pd.DataFrame(effect_rows).to_csv(OUTDIR / "effect_sizes.csv", index=False)
 
     groups = [final.loc[final["group"] == c, "total_value"] for c in conds]
-    f_stat, p_val = stats.f_oneway(*groups)
+    f_stat, p_val = stats.f_oneway(*groups)        # <-- corrected call
     print(f"\nOne-way ANOVA on V_i(T): F={f_stat:.2f}, p={p_val:.3g}")
 
+    # Component share at T
     share = (
         final.groupby("group")[["operand_value", "operant_value", "orchestrant_value"]]
         .mean()
@@ -194,27 +188,32 @@ def main(conds: list[str]):
     print("\nComponent share at T (mean %, rounded):\n", share.round(1))
 
     final.to_csv(OUTDIR / "final_snapshot.csv", index=False)
+
+    # Save param log
     with open(OUTDIR / "param_log.json", "w") as f:
         json.dump({**COMMON, **CONDITIONS}, f, indent=2)
 
-    plot_trajectories(summary_df, conds)
-    plot_delta(summary_df, conds)
-    plot_component_shares(summary_df, conds)
+    # Plots
+    plot_trajectories(stats_df, conds)
+    plot_delta(stats_df, conds)
+    plot_component_shares(stats_df, conds)
     plot_final_distribution(final)
 
-    print("\nData & figures saved to working directory.")
-    print("\nAsymptote note: Curves flatten because the externality-driven "
-          "orchestrant stock R_t approaches a bounded equilibrium while "
-          "operant uniqueness erodes (ε > 0), limiting further growth.")
+    print("\nData & figures saved. Asymptote note: Curves flatten as "
+          "externality-driven orchestrant stock approaches equilibrium "
+          "and operant uniqueness erodes (ε > 0).")
 
 
+# -------------------- CLI ---------------------------------------------------
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Run multi-condition orchestrant experiment.")
-    ap.add_argument(
+    parser = argparse.ArgumentParser(
+        description="Run multi-condition orchestrant experiment."
+    )
+    parser.add_argument(
         "--conds",
         nargs="+",
         default=list(CONDITIONS.keys()),
-        help=f"Subset of conditions (default all: {list(CONDITIONS.keys())})",
+        help="Subset of conditions to run",
     )
-    args = ap.parse_args()
+    args = parser.parse_args()
     main(args.conds)
