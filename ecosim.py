@@ -1,31 +1,28 @@
 # ---------------------------- ecosim.py ----------------------------
 """
-Ecosystem-Dominant Logic simulation engine      ·      v1.4
-===============================================================
+Ecosystem-Dominant Logic simulation engine               •  v1.5  (May 2025)
+====================================================================
 
-New in 1.4
-----------
-Actor heterogeneity, negative externalities, adaptive orchestrant
-memory, tipping-point penalties, and optional diagnostics — while
-retaining full backward compatibility.
+Backward-compatible with v1.4  ➜  new behaviour is gated by flags.
 
-Actor roles (assigned on init)
-    • Generator  – 60 %   (operant output ×1.2)
-    • Absorber   – 30 %   (operant output ×0.7)
-    • Suppressor – 10 %   (operant ×1.0, but sends negative externalities)
+NEW OPTIONAL CAPABILITIES
+-------------------------
+1. Receiver-sensitivity            (enable_receiver_sensitivity)
+   • Each actor draws  s_i ~ U[0.8,1.2]  applied to inbound externalities.
 
-Key options (all False by default to preserve prior behaviour)
-    enable_actor_types          – activate role logic
-    enable_negative_externality – flip up to 20 % of edges negative
-    enable_volatility_memory    – adapt ρ_t to rolling inflow volatility
-    enable_tipping_penalty      – apply −20 % to next y_core if V_i > tipping_thr
-    enable_diagnostics          – add extra fields & optional printouts
+2. Externality balance tracking    (enable_externality_balance)
+   • Logs  net_ext_i(t) = Σ_j e_ij − Σ_j e_ji.
 
-Previous features
-    • Orchestrant-boosted productivity (bounded formula)
-    • R_cap ceiling, bounded boosts, debug printing
+3. Tipping-recovery mechanism      (enable_tipping_recovery)
+   • Boolean state is_tipped  ⇒  −20 % productivity until value < 0.8·thr.
 
-API compatibility: older experiment scripts need no change.
+4. Local orchestrant field         (enable_local_orchestrant_field)
+   • Maintains vector R_i(t)  (personal stock based on inflow);
+     global scalar R̄_t for backward-compatibility.
+
+Diagnostics (all in output when enable_diagnostics=True)
+    receiver_sensitivity, externality_received, net_ext,
+    volatility, rho_t, is_tipped
 """
 from __future__ import annotations
 import numpy as np
@@ -33,47 +30,38 @@ import pandas as pd
 import networkx as nx
 from collections import deque
 
-# ------------------ defaults -------------------------------------------------
+# ------------------------------------------------------------------ defaults
 _DEFAULTS = dict(
-    # structural + externality params
+    # core params (as in v1.4)
     w_O=1.0, w_P=1.0, eta=0.3, theta=0.1,
-    # orchestrant dynamics
-    rho_base=0.8,           # baseline memory
-    phi=0.2, psi=0.3, lam=0.1, gamma=0.2,
-    alpha_val=0.5, beta_val=0.3,               # value decomposition
-    epsilon=0.4, sigma=0.4,
-    # boosts
-    orchestrant_boost_operant=False,
-    orchestrant_boost_operand=False,
-    alpha=0.05, beta=0.025,
-    R_cap=None,
-    print_growth_debug=False,
-    # new behavioural toggles
-    enable_actor_types=False,
-    enable_negative_externality=False,
-    enable_volatility_memory=False,
-    enable_tipping_penalty=False,
-    enable_diagnostics=False,
-    tipping_thr=10.0,
+    rho_base=0.8, phi=0.2, psi=0.3, lam=0.1, gamma=0.2,
+    alpha_val=0.5, beta_val=0.3, epsilon=0.4, sigma=0.4,
+    orchestrant_boost_operant=False, orchestrant_boost_operand=False,
+    alpha=0.05, beta=0.025, R_cap=None, print_growth_debug=False,
+    enable_actor_types=False, enable_negative_externality=False,
+    enable_volatility_memory=False, enable_tipping_penalty=False,
+    enable_diagnostics=False, tipping_thr=10.0,
+    # -------- v1.5 additions ----------
+    enable_receiver_sensitivity=False,
+    enable_externality_balance=False,
+    enable_tipping_recovery=False,
+    enable_local_orchestrant_field=False,
 )
 
-# ------------------ helpers --------------------------------------------------
-def _safe_rng(seed_or_rng=None):
-    if isinstance(seed_or_rng, np.random.RandomState):
-        return seed_or_rng
-    return np.random.RandomState(seed_or_rng)
+# ------------------------------------------------------------------ helpers
+def _rng(x=None):
+    return x if isinstance(x, np.random.RandomState) else np.random.RandomState(x)
 
-# ---------- network + resource initialisation -------------------------------
-def initialize_network(n: int, density: float, *, rng):
-    k = max(1, int(density * n))
+def _init_network(n, dens, rng):
+    k = max(1, int(dens * n))
     G = nx.watts_strogatz_graph(n, k, p=0.1, seed=rng)
     if not nx.is_connected(G):
-        raise ValueError("Network disconnected; raise density.")
+        raise ValueError("Network disconnected – raise density.")
     for u, v in G.edges:
-        G.edges[u, v]['weight'] = rng.uniform(0.5, 1.0)
+        G.edges[u, v]["weight"] = rng.uniform(0.5, 1.0)
     return G
 
-def assign_actor_types(nodes, *, rng):
+def _assign_types(nodes, rng):
     n = len(nodes)
     roles = (["Generator"]  * int(0.6*n) +
              ["Absorber"]   * int(0.3*n) +
@@ -81,142 +69,194 @@ def assign_actor_types(nodes, *, rng):
     rng.shuffle(roles)
     return dict(zip(nodes, roles))
 
-def initialize_resources(G: nx.Graph, *, rng, enable_actor_types: bool):
-    rng = _safe_rng(rng)
-    types = assign_actor_types(G.nodes, rng=rng) if enable_actor_types else {}
+def _init_resources(G, rng, actor_types_on, recv_sense_on):
+    rng = _rng(rng)
+    types = _assign_types(G.nodes, rng) if actor_types_on else {}
+    sens  = rng.uniform(0.8, 1.2, size=len(G)) if recv_sense_on else np.ones(len(G))
     P_u = rng.normal(1, 0.4, size=len(G))
-    P_shared = P_u.mean()
-    for idx, n in enumerate(G.nodes):
-        G.nodes[n]['O'] = rng.normal(1, 0.2)
-        G.nodes[n]['P_u'] = P_u[idx]
-        G.nodes[n]['P_s'] = P_shared
-        G.nodes[n]['R'] = 0.0
-        if enable_actor_types:
-            G.nodes[n]['type'] = types[n]
+    P_s = P_u.mean()
+    for i, n in enumerate(G.nodes):
+        G.nodes[n].update({
+            "O": rng.normal(1, 0.2),
+            "P_u": P_u[i],
+            "P_s": P_s,
+            "R": 0.0,
+            "type": types.get(n, "None"),
+            "sensitivity": sens[i],
+            "is_tipped": False
+        })
 
-# ---------- main simulation --------------------------------------------------
-def run_simulation(n_actors: int = 500, n_steps: int = 300, density: float = 0.05,
-                   seed: int | None = 42, **opts) -> pd.DataFrame:
-    p = {**_DEFAULTS, **opts}
-    rng = _safe_rng(seed)
+# ------------------------------------------------------------------ main
+def run_simulation(n_actors: int=500, n_steps: int=300, density: float=0.05,
+                   seed: int|None=42, **user) -> pd.DataFrame:
+    p = {**_DEFAULTS, **user}
+    rng = _rng(seed)
 
-    # network and resources
-    G = initialize_network(n_actors, density, rng=rng)
-    initialize_resources(G, rng=rng, enable_actor_types=p['enable_actor_types'])
-    S = nx.to_numpy_array(G, weight='weight')
+    # network & resources ----------------------------------------------------
+    G = _init_network(n_actors, density, rng)
+    _init_resources(G, rng,
+                    p['enable_actor_types'],
+                    p['enable_receiver_sensitivity'])
+    S = nx.to_numpy_array(G, weight="weight")
 
-    # optionally mark some negative edges (except suppressor rule handled later)
+    # negative externalities (random 20 % unless suppressor rule flips sign)
     if p['enable_negative_externality']:
         neg_mask = rng.rand(*S.shape) < 0.2
         S = np.where(neg_mask, -S, S)
 
-    R_t, y_prev = 0.0, np.zeros(n_actors)
-    inflow_window: deque[float] = deque(maxlen=5)
-    logs = []
-    actor_types = np.array([G.nodes[n].get('type', 'None') for n in G.nodes])
+    # pre-compute arrays that don’t change
+    actor_types = np.array([G.nodes[n]["type"] for n in G.nodes])
+    sensitivity = np.array([G.nodes[n]["sensitivity"] for n in G.nodes])
+
+    # orchestrant stocks
+    R_vec = np.zeros(n_actors)                      # local if enabled
+    R_scalar = 0.0
+    inflow_win: deque[float] = deque(maxlen=5)
+
+    # diagnostics accumulators
+    logs, tipped = [], np.zeros(n_actors, dtype=bool)
 
     for t in range(n_steps):
-        # elasticity blending
+        # elasticity blend ---------------------------------------------------
         for n in G.nodes:
-            G.nodes[n]['P'] = (1-p['epsilon'])*G.nodes[n]['P_u'] + p['epsilon']*G.nodes[n]['P_s']
-        O = np.array([G.nodes[n]['O'] for n in G.nodes])
-        P_vec = np.array([G.nodes[n]['P'] for n in G.nodes])
+            g = G.nodes[n]
+            g["P"] = (1 - p['epsilon']) * g["P_u"] + p['epsilon'] * g["P_s"]
+        O = np.array([G.nodes[n]["O"] for n in G.nodes])
+        P_vec = np.array([G.nodes[n]["P"] for n in G.nodes])
 
-        # role-based output multiplier
-        operant_multiplier = np.ones(n_actors)
+        # role multipliers on operant term
+        op_mult = np.ones(n_actors)
         if p['enable_actor_types']:
-            operant_multiplier[actor_types == 'Generator']  = 1.2
-            operant_multiplier[actor_types == 'Absorber']   = 0.7
-            # Suppressor stays 1.0
+            op_mult[actor_types == "Generator"]  = 1.2
+            op_mult[actor_types == "Absorber"]   = 0.7
 
-        # bounded boosts
-        boost_operant = 1 + (p['alpha']*R_t) / (1 + p['alpha']*R_t) \
-                        if p['orchestrant_boost_operant'] else 1.0
-        boost_operand = 1 + (p['beta'] *R_t) / (1 + p['beta'] *R_t) \
-                        if p['orchestrant_boost_operand'] else 1.0
+        # bounded boosts (scalar or per-actor)
+        boost_opern = 1 + (p['alpha']* (R_vec if p['enable_local_orchestrant_field']
+                                        else R_scalar)) \
+                      / (1 + p['alpha']* (R_vec if p['enable_local_orchestrant_field']
+                                           else R_scalar)) \
+                      if p['orchestrant_boost_operant'] else 1.0
+        boost_operd = 1 + (p['beta'] * (R_vec if p['enable_local_orchestrant_field']
+                                        else R_scalar)) \
+                      / (1 + p['beta'] * (R_vec if p['enable_local_orchestrant_field']
+                                           else R_scalar)) \
+                      if p['orchestrant_boost_operand'] else 1.0
 
-        operand_term = p['w_O'] * O * boost_operand
-        operant_term = p['w_P'] * P_vec * boost_operant * operant_multiplier
+        # apply tipping-recovery penalty
+        pen = np.where(tipped & p['enable_tipping_recovery'], 0.8, 1.0)
 
-        # tipping-point penalty applied to next core output
+        operand_term = p['w_O'] * O           * boost_operd * pen
+        operant_term = p['w_P'] * P_vec * op_mult * boost_opern * pen
+
+        # simple tipping penalty from v1.4 (kept for backwards flag)
         if p['enable_tipping_penalty'] and t > 0:
-            penal_mask = prev_total > p['tipping_thr']
+            penal_mask = prev_V > p['tipping_thr']
             operand_term[penal_mask] *= 0.8
             operant_term[penal_mask] *= 0.8
 
         y_core = operand_term + operant_term
-        y = y_core + p['theta'] * S.dot(y_prev)
+        y_prev_arr = np.array([G.nodes[n].get("y_prev", 0.0) for n in G.nodes])
+        y = y_core + p['theta'] * S.dot(y_prev_arr)
 
-        # compute externalities with sign adjustments for suppressors
-        e = p['eta'] * y[:, None] * np.exp(-(1 - np.abs(S)) / p['sigma']) * np.sign(S)
+        # externalities ------------------------------------------------------
+        e = p['eta'] * y[:, None] * np.exp(-(1 - np.abs(S)) / p['sigma']) \
+            * np.sign(S)
         if p['enable_actor_types']:
-            sup_idx = np.where(actor_types == 'Suppressor')[0]
-            # suppressor sends negative stronger spillovers
+            sup_idx = np.where(actor_types == "Suppressor")[0]
             e[sup_idx, :] *= -1.5
-        E_t = e.sum()
-        if p['enable_diagnostics']:
-            ext_received = e.sum(axis=0)
 
-        # orchestrant memory adaptation
-        inflow_window.append(E_t)
-        if p['enable_volatility_memory'] and len(inflow_window) == inflow_window.maxlen:
-            vol = np.std(inflow_window)
-            rho_t = max(0.5, min(0.95, p['rho_base'] * (1 - vol / (abs(E_t)+1e-6))))
+        ext_received = (e * sensitivity[None, :]).sum(axis=0) \
+                       if p['enable_receiver_sensitivity'] else e.sum(axis=0)
+
+        if p['enable_externality_balance']:
+            net_ext = e.sum(axis=1) - e.sum(axis=0)
+
+        # orchestrant updates -----------------------------------------------
+        if p['enable_local_orchestrant_field']:
+            rho_t = np.full(n_actors, p['rho_base'])
+            if p['enable_volatility_memory']:
+                inflow_win.append(ext_received.sum())
+                if len(inflow_win) == inflow_win.maxlen:
+                    vol = np.std(inflow_win)
+                    rho_t = np.clip(p['rho_base'] * (1 - vol /
+                               (abs(ext_received.mean())+1e-6)), 0.5, 0.95)
+            R_vec = rho_t * R_vec + (1 - rho_t) * ext_received
+            if p['R_cap'] is not None:
+                R_vec = np.clip(R_vec, None, p['R_cap'])
+            R_scalar = R_vec.mean()
         else:
-            vol, rho_t = 0.0, p['rho_base']
+            inflow_win.append(e.sum())
+            if p['enable_volatility_memory'] and len(inflow_win) == inflow_win.maxlen:
+                vol = np.std(inflow_win)
+                rho_t_scalar = np.clip(p['rho_base'] * (1 - vol /
+                                 (abs(e.sum())+1e-6)), 0.5, 0.95)
+            else:
+                vol, rho_t_scalar = 0.0, p['rho_base']
+            R_scalar = rho_t_scalar * R_scalar + (1 - rho_t_scalar) * e.sum()
+            if p['R_cap'] is not None:
+                R_scalar = min(R_scalar, p['R_cap'])
 
-        R_t = rho_t * R_t + (1 - rho_t) * E_t
-        if p['R_cap'] is not None:
-            R_t = min(R_t, p['R_cap'])
+        # value & advantage --------------------------------------------------
+        y_tilde = (1 + p['phi'] * (R_vec if p['enable_local_orchestrant_field']
+                                   else R_scalar)) * y
+        e_scaled = (1 + p['psi'] * (R_vec[:, None] if p['enable_local_orchestrant_field']
+                                    else R_scalar)) * e
+        V = (p['alpha_val']*y_tilde +
+             p['beta_val'] * e_scaled.sum(axis=0) +
+             p['gamma'] * (R_vec if p['enable_local_orchestrant_field'] else R_scalar) +
+             p['lam']   * (R_vec if p['enable_local_orchestrant_field'] else R_scalar))
+        CA = V - V.mean()
 
-        y_tilde  = (1 + p['phi'] * R_t) * y
-        e_scaled = (1 + p['psi'] * R_t) * e
+        # update tipping state for next round
+        if p['enable_tipping_recovery']:
+            tipped = np.where(V > p['tipping_thr'], True,
+                     np.where(V < 0.8*p['tipping_thr'], False, tipped))
 
-        V, CA = _compute_value(
-            y_tilde, e_scaled, R_t, p['alpha_val'], p['beta_val'], p['gamma'], p['lam']
-        )
-
+        # debug --------------------------------------------------------------
         if p['print_growth_debug']:
-            print(f"t={t:3d} R={R_t:.2f}  boost_op={boost_operant:.2f}  "
-                  f"boost_ov={boost_operand:.2f}")
+            print(f"t={t:3d}  R̄={R_scalar:.2f}  "
+                  f"boost_Oprnt={np.mean(boost_opern):.2f}")
 
-        # ------- logging ----------------------------------------------------
-        for idx, n in enumerate(G.nodes):
-            record = dict(time=t, actor_id=n,
-                          operand_value=operand_term[idx],
-                          operant_value=operant_term[idx],
-                          orchestrant_value=p['gamma']*R_t,
-                          total_value=V[idx],
-                          competitive_advantage=CA[idx])
+        # logging ------------------------------------------------------------
+        for i, n in enumerate(G.nodes):
+            rec = dict(time=t, actor_id=n,
+                       operand_value=operand_term[i],
+                       operant_value=operant_term[i],
+                       orchestrant_value=p['gamma']*
+                         (R_vec[i] if p['enable_local_orchestrant_field']
+                                   else R_scalar),
+                       total_value=V[i],
+                       competitive_advantage=CA[i])
             if p['enable_actor_types']:
-                record['actor_type'] = actor_types[idx]
+                rec['actor_type'] = actor_types[i]
             if p['enable_diagnostics']:
-                record['externality_received'] = ext_received[idx]
-                record['volatility'] = vol
-                record['rho_t'] = rho_t
-            logs.append(record)
+                rec['externality_received'] = ext_received[i]
+                if p['enable_externality_balance']:
+                    rec['net_ext'] = net_ext[i]
+                rec['volatility'] = np.std(inflow_win) if inflow_win else 0.0
+                rec['rho_t'] = (rho_t[i] if p['enable_local_orchestrant_field']
+                                else rho_t_scalar)
+                rec['receiver_sensitivity'] = sensitivity[i]
+                if p['enable_tipping_recovery']:
+                    rec['is_tipped'] = bool(tipped[i])
+            logs.append(rec)
 
-        y_prev, prev_total = y, V
+            # store previous y for neighbour influence
+            G.nodes[n]["y_prev"] = y[i]
+        prev_V = V
 
     return pd.DataFrame(logs)
 
-# ---------- helper ----------------------------------------------------------
-def _compute_value(y_til, e_scaled, R, a, b, gam, lam):
-    direct = a * y_til
-    rel    = b * e_scaled.sum(axis=0)
-    V = direct + rel + gam * R + lam * R
-    return V, V - V.mean()
-
-# ----------------- smoke-test (comment out in production) -------------------
+# ------------------------------------------------------------------ demo
 if __name__ == "__main__":
-    df = run_simulation(n_actors=20, n_steps=30, density=0.1, seed=0,
-                        orchestrant_boost_operant=True,
-                        orchestrant_boost_operand=True,
-                        enable_actor_types=True,
-                        enable_negative_externality=True,
-                        enable_volatility_memory=True,
-                        enable_tipping_penalty=True,
-                        enable_diagnostics=True,
-                        R_cap=10.0,
-                        print_growth_debug=False)
-    print(df.head())
+    df_demo = run_simulation(n_actors=15, n_steps=25, density=0.1, seed=1,
+                             enable_actor_types=True,
+                             enable_receiver_sensitivity=True,
+                             enable_externality_balance=True,
+                             enable_local_orchestrant_field=True,
+                             enable_tipping_recovery=True,
+                             enable_diagnostics=True,
+                             orchestrant_boost_operant=True,
+                             orchestrant_boost_operand=True,
+                             R_cap=10)
+    print(df_demo.head())
