@@ -1,32 +1,21 @@
 # ---------------------------- ecosim.py ----------------------------
 """
-Ecosystem-Dominant Logic simulation engine
-=========================================
+Ecosystem-Dominant Logic simulation engine   ·   v1.3 (bounded boosts)
+=====================================================================
 
-**NEW (v1.2) — Orchestrant-enabled productivity**
+NEW IN THIS VERSION
+-------------------
+• **Saturating orchestrant boosts** – avoids runaway exponential growth:
+      boost = 1 + (α·R_t) / (1 + α·R_t)          # asymptote at 2
+  The same form is used for both operant (α) and operand (β) terms.
 
-  • Optional coupling of orchestrant stock *R_t* to both operant and
-    operand resource contributions.
+• **Optional R-cap** – safety ceiling for the orchestrant stock:
+      R_t = min(R_t, R_cap)            # default: no cap
 
-  • Flags:
-        orchestrant_boost_operant : bool  (default False)
-        orchestrant_boost_operand : bool  (default False)
+• **Debug printing** – set `print_growth_debug=True` to emit per-tick
+  diagnostics (R_t and boost factors).
 
-  • Strength parameters:
-        alpha  – boost multiplier on operant  (default 0.10)
-        beta   – boost multiplier on operand  (default 0.05)
-
-    If enabled:
-        operant_term  = w_P * P * (1 + alpha * R_t)
-        operand_term  = w_O * O * (1 + beta  * R_t)
-
-    Otherwise falls back to the linear terms used in prior versions.
-
-The remainder of the API is unchanged, so existing field-experiment
-scripts and plotting notebooks will continue to run. Passing the new
-flags simply activates the productivity effect.
-
-Dependencies: numpy, pandas, networkx
+The public API is unchanged, so existing experiment scripts still work.
 """
 from __future__ import annotations
 import numpy as np
@@ -35,48 +24,40 @@ import networkx as nx
 
 # ------------------ defaults -------------------------------------------------
 _DEFAULTS = dict(
-    w_O=1.0, w_P=1.0,
-    eta=0.3,
-    theta=0.1,
-    rho=0.8,
-    phi=0.2, psi=0.3,
-    lam=0.1,
-    alpha_val=0.5, beta_val=0.3, gamma=0.2,   # value-decomp weights
-    epsilon=0.4,
-    sigma=0.4,
-    # NEW orchestrant-productivity controls
+    # production weights & externalities
+    w_O=1.0, w_P=1.0, eta=0.3, theta=0.1,
+    # orchestrant dynamics
+    rho=0.8, phi=0.2, psi=0.3, lam=0.1,
+    gamma=0.2, alpha_val=0.5, beta_val=0.3,
+    epsilon=0.4, sigma=0.4,
+    # orchestrant-productivity controls
     orchestrant_boost_operant=False,
     orchestrant_boost_operand=False,
-    alpha=0.10,          # strength of boost on operant term
-    beta=0.05            # strength of boost on operand term
+    alpha=0.10,          # operant boost strength
+    beta=0.05,           # operand boost strength
+    R_cap=None,          # set e.g. 10.0 to clip R_t
+    print_growth_debug=False
 )
 
 # ------------------ helpers --------------------------------------------------
 def _safe_rng(seed_or_rng=None):
-    """Return a NumPy RandomState from int, RandomState, or None."""
     if isinstance(seed_or_rng, np.random.RandomState):
         return seed_or_rng
     if seed_or_rng is None:
         return np.random.RandomState()
-    if isinstance(seed_or_rng, (int, np.integer)):
-        return np.random.RandomState(int(seed_or_rng))
-    raise TypeError("Seed must be int, RandomState, or None.")
+    return np.random.RandomState(int(seed_or_rng))
 
-def initialize_network(n_actors: int, density: float = 0.05, *, seed=None):
-    """Watts-Strogatz small-world graph with [0.5,1] proximity weights."""
-    if not (0 < density < 1):
-        raise ValueError("density must be in (0,1)")
+def initialize_network(n_actors: int, density: float, *, seed):
     rng = _safe_rng(seed)
     k = max(1, int(density * n_actors))
     G = nx.watts_strogatz_graph(n_actors, k, p=0.1, seed=rng)
     if not nx.is_connected(G):
-        raise ValueError("Generated network is disconnected – raise density")
+        raise ValueError("Network disconnected – raise density")
     for u, v in G.edges:
         G.edges[u, v]["weight"] = rng.uniform(0.5, 1.0)
     return G
 
-def initialize_resources(G: nx.Graph, *, rng=None):
-    """Seed operand (O), unique operant (P_u), shared P_s, and R=0."""
+def initialize_resources(G: nx.Graph, *, rng):
     rng = _safe_rng(rng)
     P_u = rng.normal(1, 0.4, size=len(G))
     P_shared = P_u.mean()
@@ -87,50 +68,44 @@ def initialize_resources(G: nx.Graph, *, rng=None):
         G.nodes[n]["R"] = 0.0
 
 def update_operant_resources(G: nx.Graph, *, epsilon: float):
-    """Blend unique and shared operant resources via elasticity ε."""
     for n in G.nodes:
         G.nodes[n]["P"] = (1 - epsilon) * G.nodes[n]["P_u"] + epsilon * G.nodes[n]["P_s"]
 
-def compute_externalities(G: nx.Graph, y_vec: np.ndarray, *, eta: float, sigma: float):
-    """e_ij = η · y_i · exp( − (1 − w_ij)/σ )."""
+def compute_externalities(G: nx.Graph, y: np.ndarray, *, eta: float, sigma: float):
     w = nx.to_numpy_array(G, weight="weight")
     decay = np.exp(-(1 - w) / sigma)
-    return eta * y_vec[:, None] * decay
+    return eta * y[:, None] * decay
 
-def update_orchestrant_resources(R_prev: float, E_t: float, *, rho: float):
-    """R_t = ρ R_{t−1} + (1−ρ) E_t"""
-    return rho * R_prev + (1 - rho) * E_t
+def update_R(R_prev: float, E_t: float, rho: float, cap: float | None):
+    R = rho * R_prev + (1 - rho) * E_t
+    if cap is not None:
+        R = min(R, cap)
+    return R
 
-def compute_value(y_tilde: np.ndarray, e_scaled: np.ndarray, R_t: float, *, 
-                  alpha_val, beta_val, gamma, lam):
-    """Return V and CA vectors (actor-level)."""
+def compute_value(y_tilde, e_scaled, R, *, alpha_val, beta_val, gamma, lam):
     direct = alpha_val * y_tilde
     relational = beta_val * e_scaled.sum(axis=0)
-    orchestrant = gamma * R_t
-    V = direct + relational + orchestrant + lam * R_t
+    V = direct + relational + gamma * R + lam * R
     return V, V - V.mean()
 
-# ------------------ main wrapper --------------------------------------------
+# ------------------ simulation wrapper --------------------------------------
 def run_simulation(n_actors: int = 500, n_steps: int = 500, density: float = 0.05,
-                   seed: int = 42, **params) -> pd.DataFrame:
+                   seed: int = 42, **kwargs) -> pd.DataFrame:
     """
-    Simulate the EDL ecosystem.
+    Run the EDL simulation.
 
-    New options
-    -----------
-    orchestrant_boost_operant : bool
-        If True, operant productivity scales with `(1 + alpha * R_t)`.
-    orchestrant_boost_operand : bool
-        If True, operand productivity scales with `(1 + beta  * R_t)`.
-    alpha : float
-        Strength of orchestrant boost on operant term.
-    beta  : float
-        Strength of orchestrant boost on operand term.
+    Parameters added in v1.3
+    ------------------------
+    orchestrant_boost_operant : bool, default False
+    orchestrant_boost_operand : bool, default False
+    alpha : float  – operant boost strength
+    beta  : float  – operand boost strength
+    R_cap : float | None – upper limit for R_t (None = no cap)
+    print_growth_debug : bool – print R_t and boost factors each tick
     """
-    p = {**_DEFAULTS, **params}          # merge defaults with overrides
+    p = {**_DEFAULTS, **kwargs}
     rng = _safe_rng(seed)
 
-    # initialise
     G = initialize_network(n_actors, density, seed=rng)
     initialize_resources(G, rng=rng)
     S = nx.to_numpy_array(G, weight="weight")
@@ -144,35 +119,38 @@ def run_simulation(n_actors: int = 500, n_steps: int = 500, density: float = 0.0
         O = np.array([G.nodes[n]["O"] for n in G.nodes])
         P = np.array([G.nodes[n]["P"] for n in G.nodes])
 
-        # ---------- orchestrant-enabled productivity -----------------------
-        operand_term = p["w_O"] * O
-        operant_term = p["w_P"] * P
-        if p["orchestrant_boost_operand"]:
-            operand_term *= (1.0 + p["beta"] * R_t)
+        # ---------- bounded boost factors ----------------------------------
+        boost_operant  = 1.0
+        boost_operand  = 1.0
         if p["orchestrant_boost_operant"]:
-            operant_term *= (1.0 + p["alpha"] * R_t)
+            boost_operant = 1 + (p["alpha"] * R_t) / (1 + p["alpha"] * R_t)
+        if p["orchestrant_boost_operand"]:
+            boost_operand = 1 + (p["beta"] * R_t)  / (1 + p["beta"]  * R_t)
 
-        # core production and neighbour influence
+        operand_term = p["w_O"] * O * boost_operand
+        operant_term = p["w_P"] * P * boost_operant
+
+        if p["print_growth_debug"]:
+            print(f"t={t:3d}  R={R_t:.3f}  "
+                  f"boost_operant={boost_operant:.3f}  "
+                  f"boost_operand={boost_operand:.3f}")
+
         y_core = operand_term + operant_term
         y = y_core + p["theta"] * S.dot(y_prev)
 
-        # externalities & orchestrant update
         e = compute_externalities(G, y, eta=p["eta"], sigma=p["sigma"])
         E_t = e.sum()
-        R_t = update_orchestrant_resources(R_t, E_t, rho=p["rho"])
+        R_t = update_R(R_t, E_t, rho=p["rho"], cap=p["R_cap"])
 
-        # orchestrant scaling
         y_tilde = (1 + p["phi"] * R_t) * y
         e_scaled = (1 + p["psi"] * R_t) * e
 
-        # value & advantage
         V, CA = compute_value(
             y_tilde, e_scaled, R_t,
             alpha_val=p["alpha_val"], beta_val=p["beta_val"],
             gamma=p["gamma"], lam=p["lam"]
         )
 
-        # ------------------- logging --------------------------------------
         for idx, n in enumerate(G.nodes):
             logs.append(dict(
                 time=t, actor_id=n,
@@ -188,10 +166,11 @@ def run_simulation(n_actors: int = 500, n_steps: int = 500, density: float = 0.0
 
 # ------------------ smoke-test ---------------------------------------------
 if __name__ == "__main__":
-    df_demo = run_simulation(
-        n_actors=10, n_steps=20, density=0.2, seed=1,
+    df = run_simulation(
+        n_actors=10, n_steps=15, density=0.2, seed=1,
         orchestrant_boost_operant=True,
-        orchestrant_boost_operand=True
+        orchestrant_boost_operand=True,
+        print_growth_debug=True,
+        R_cap=10.0
     )
-    print(df_demo.head())
-    print("Shape:", df_demo.shape)
+    print(df.head())
