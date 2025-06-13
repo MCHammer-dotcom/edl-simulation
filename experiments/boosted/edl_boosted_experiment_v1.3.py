@@ -37,7 +37,8 @@ from scipy import stats
 
 from src import ecosim_v1_5 as ecosim
 # ---------------------------------------------------------------------
-OUTDIR = Path(".")
+OUT = Path("outputs")
+OUT.mkdir(exist_ok=True)
 
 # Common parameters for *all* conditions (incl. new v1.3 controls)
 COMMON = dict(
@@ -95,7 +96,7 @@ def plot_trajectories(stats_df, groups):
     plt.xlabel("Time"); plt.ylabel("Mean Total Value")
     plt.title("Total Value Trajectories (bounded boosts)")
     plt.legend(); plt.tight_layout()
-    plt.savefig(OUTDIR / "boosted_value_trajectories.png", dpi=300)
+    plt.savefig(OUT / "boosted_value_trajectories.png", dpi=300)
     plt.close()
 
 def plot_delta(stats_df, groups):
@@ -108,7 +109,7 @@ def plot_delta(stats_df, groups):
         plt.plot(delta.index, delta, label=f"{g} − Control", linewidth=2, color=col)
     plt.xlabel("Time"); plt.ylabel("Δ Mean Total Value")
     plt.title("Value Gain Over Baseline (bounded)"); plt.grid(alpha=0.4); plt.legend()
-    plt.tight_layout(); plt.savefig(OUTDIR / "boosted_delta_plot.png", dpi=300)
+    plt.tight_layout(); plt.savefig(OUT / "boosted_delta_plot.png", dpi=300)
     plt.close()
 
 def plot_decomposition(stats_df, groups):
@@ -127,14 +128,14 @@ def plot_decomposition(stats_df, groups):
         ax.set_title(g); ax.set_xlabel("Time")
     axs[0].set_ylabel("Mean Component Value"); axs[0].legend(loc="upper left")
     fig.suptitle("Component Decomposition (bounded)"); fig.tight_layout()
-    fig.savefig(OUTDIR / "boosted_decomposition.png", dpi=300); plt.close(fig)
+    fig.savefig(OUT / "boosted_decomposition.png", dpi=300); plt.close(fig)
 
 def plot_violin(df_final):
     plt.figure(figsize=(7.1, 4.5))
     sns.violinplot(data=df_final, x="group", y="total_value",
                    palette="Set2", inner="box")
     plt.ylabel("Final V_i(T)"); plt.title("Final Actor Value Distribution")
-    plt.tight_layout(); plt.savefig(OUTDIR / "boosted_value_violin.png", dpi=300)
+    plt.tight_layout(); plt.savefig(OUT / "boosted_value_violin.png", dpi=300)
     plt.close()
 # ---------------------------------------------------------------------
 def main():
@@ -142,10 +143,10 @@ def main():
     df_all = pd.concat(dfs, ignore_index=True)
 
     stats_df = summarise(df_all)
-    stats_df.to_csv(OUTDIR / "group_summary.csv", index=False)
+    stats_df.to_csv(OUT / "group_summary.csv", index=False)
 
     df_final = df_all[df_all["time"] == COMMON["n_steps"] - 1]
-    df_final.to_csv(OUTDIR / "final_snapshot.csv", index=False)
+    df_final.to_csv(OUT / "final_snapshot.csv", index=False)
 
     baseline_vals = df_final[df_final["group"] == "Baseline-Control"]["total_value"]
     eff_rows = []
@@ -153,7 +154,7 @@ def main():
         if g == "Baseline-Control": continue
         d = effect_size(df_final[df_final["group"] == g]["total_value"], baseline_vals)
         eff_rows.append({"comparison": f"{g} vs Baseline", "cohens_d": d})
-    pd.DataFrame(eff_rows).to_csv(OUTDIR / "effect_sizes.csv", index=False)
+    pd.DataFrame(eff_rows).to_csv(OUT / "effect_sizes.csv", index=False)
 
     samples = [df_final[df_final["group"] == g]["total_value"] for g in CONDITIONS]
     F, p = stats.f_oneway(*samples)
@@ -165,7 +166,7 @@ def main():
         .round(1)
     )
 
-    with open(OUTDIR / "param_log.json", "w") as f:
+    with open(OUT / "param_log.json", "w") as f:
         json.dump({"COMMON": COMMON, "CONDITIONS": CONDITIONS}, f, indent=2)
 
     plot_trajectories(stats_df, list(CONDITIONS.keys()))
@@ -179,6 +180,7 @@ def main():
     print("\nNote: Bounded boosts (α=0.05, β=0.025, R_cap=10) implement a "
           "saturating enablement effect, preventing runaway growth while "
           "reflecting EDL’s orchestrant context influences.")
+    print(f"Saved to {OUT.resolve()}")
 
 if __name__ == "__main__":
     main()

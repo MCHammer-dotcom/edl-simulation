@@ -43,7 +43,8 @@ from scipy import stats
 
 from src import ecosim_v1_5 as ecosim
 # --------------------------------------------------------------------------
-OUTDIR = Path(".")
+OUT = Path("outputs")
+OUT.mkdir(exist_ok=True)
 COMMON = dict(n_actors=50, n_steps=100, density=0.05, seed=123)
 
 # Orchestrant parameter schedule per condition ------------------------------
@@ -134,7 +135,7 @@ def plot_trajectories(stats: pd.DataFrame, conds: list[str]):
     plt.title("Total Value Trajectories Across Conditions")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(OUTDIR / "exp_value_trajectories.png", dpi=300)
+    plt.savefig(OUT / "exp_value_trajectories.png", dpi=300)
     plt.close()
 
 
@@ -151,7 +152,7 @@ def plot_delta(stats: pd.DataFrame, conds: list[str]):
     plt.grid(True, linestyle="--", alpha=0.4)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(OUTDIR / "exp_delta_value.png", dpi=300)
+    plt.savefig(OUT / "exp_delta_value.png", dpi=300)
     plt.close()
 
 
@@ -175,7 +176,7 @@ def plot_component_shares(stats: pd.DataFrame, conds: list[str]):
     axs[0].legend(loc="upper left")
     fig.suptitle("Component Decomposition by Condition")
     fig.tight_layout()
-    fig.savefig(OUTDIR / "exp_value_decomposition.png", dpi=300)
+    fig.savefig(OUT / "exp_value_decomposition.png", dpi=300)
     plt.close(fig)
 
 
@@ -187,7 +188,7 @@ def plot_final_distribution(df_final: pd.DataFrame):
     plt.ylabel("Final V_i(T)")
     plt.title("Final Actor Value Distribution")
     plt.tight_layout()
-    plt.savefig(OUTDIR / "exp_final_value_distribution.png", dpi=300)
+    plt.savefig(OUT / "exp_final_value_distribution.png", dpi=300)
     plt.close()
 
 
@@ -198,7 +199,7 @@ def main(conds: list[str]):
     df_all = pd.concat(dfs, ignore_index=True)
 
     stats = summarise(df_all)
-    stats.to_csv(OUTDIR / "group_summary.csv", index=False)
+    stats.to_csv(OUT / "group_summary.csv", index=False)
 
     # Effect sizes & one-way ANOVA on final total value ---------------------
     final = df_all[df_all["time"] == COMMON["n_steps"] - 1]
@@ -212,7 +213,7 @@ def main(conds: list[str]):
         )
         effect_rows.append({"comparison": f"{c} vs Control", "cohens_d": d})
     eff_df = pd.DataFrame(effect_rows)
-    eff_df.to_csv(OUTDIR / "effect_sizes.csv", index=False)
+    eff_df.to_csv(OUT / "effect_sizes.csv", index=False)
 
     groups = [final.loc[final["group"] == c, "total_value"] for c in conds]
     f_stat, p_val = stats.anova.f_oneway(*groups)
@@ -227,10 +228,10 @@ def main(conds: list[str]):
     print("\nComponent share at T (mean %, rounded):\n", share.round(1))
 
     # Save final snapshot
-    final.to_csv(OUTDIR / "final_snapshot.csv", index=False)
+    final.to_csv(OUT / "final_snapshot.csv", index=False)
 
     # Parameter log
-    with open(OUTDIR / "param_log.json", "w") as f:
+    with open(OUT / "param_log.json", "w") as f:
         json.dump({**COMMON, **CONDITIONS}, f, indent=2)
 
     # Plots
@@ -239,7 +240,7 @@ def main(conds: list[str]):
     plot_component_shares(stats, conds)
     plot_final_distribution(final)
 
-    print("\nData & figures saved to working directory.")
+    print(f"\nData & figures saved to {OUT.resolve()}")
     print("\nAsymptote note: Curves flatten because the externality-driven "
           "orchestrant stock R_t approaches a bounded equilibrium while "
           "operant uniqueness erodes (ε > 0), limiting further growth.")

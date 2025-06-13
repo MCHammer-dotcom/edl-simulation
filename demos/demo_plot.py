@@ -16,6 +16,7 @@ Usage
 try:
     import matplotlib.pyplot as plt
     import pandas as pd
+    from pathlib import Path
     from src import ecosim_v1_5 as ecosim
 except ModuleNotFoundError as e:
     print(
@@ -26,6 +27,9 @@ except ModuleNotFoundError as e:
     raise
 
 # ----------------------------------------------------------------------
+OUT = Path("outputs")
+OUT.mkdir(exist_ok=True)
+
 def run_demo():
     """Run simulation and make the orchestrant-value plot."""
     # 1) Run simulation
@@ -59,7 +63,9 @@ def run_demo():
     plt.show()
 
     # Uncomment the following line to save the plot to disk at 300 dpi
-    # plt.savefig("orchestrant_plot.png", dpi=300)
+    # plt.savefig(OUT / "orchestrant_plot.png", dpi=300)
+
+    print(f"Saved to {OUT.resolve()}")
 
     # If the curve is flat, possible issues:
     #   • eta=0 or rho=1  ⇒ orchestrant stock never grows

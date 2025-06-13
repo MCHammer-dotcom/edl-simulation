@@ -20,12 +20,16 @@ try:
     plt.style.use("seaborn-v0_8-muted")          # clean Nature-ish look
     import pandas as pd
     import argparse
+    from pathlib import Path
     from src import ecosim_v1_5 as ecosim
 except ModuleNotFoundError:
     print("Missing package. Install with:\n"
           "    pip install matplotlib pandas networkx")
     raise
 # -------------------------------------------------------------------
+OUT = Path("outputs")
+OUT.mkdir(exist_ok=True)
+
 def plot_decomposition(grouped_df: pd.DataFrame,
                        use_line_plot: bool = False,
                        save_path: str = "value_decomposition.png") -> None:
@@ -114,7 +118,7 @@ def main():
     )
 
     # 4) Export CSV ----------------------------------------------------------
-    csv_path = "decomposition_data.csv"
+    csv_path = OUT / "decomposition_data.csv"
     grouped.to_csv(csv_path, index=False)
     print(f"Aggregated data saved to {csv_path}")
     print(grouped.head())
@@ -123,9 +127,10 @@ def main():
     out_name = ("value_decomposition_lines.png"
                 if use_line_plot else
                 "value_decomposition_stacked.png")
-
-    plot_decomposition(grouped, use_line_plot=use_line_plot, save_path=out_name)
-    print(f"Figure saved to {out_name}")
+    out_path = OUT / out_name
+    plot_decomposition(grouped, use_line_plot=use_line_plot, save_path=out_path)
+    print(f"Figure saved to {out_path}")
+    print(f"Saved to {OUT.resolve()}")
 
 # --------------------------------------------------------------------------
 if __name__ == "__main__":
