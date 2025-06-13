@@ -1,4 +1,4 @@
-# ---------------------- value_decomposition.py ----------------------
+# ---------------------- value_decomposition_v1.5.py ----------------------
 """
 Decomposition of Value Sources Over Time
 ========================================
@@ -8,10 +8,10 @@ operant, and orchestrant contributions evolve in the simulation.
 Run
 ---
 # Stacked-area (default)
-python value_decomposition.py
+python analysis/value_decomposition_v1.5.py
 
 # Overlaid line plot
-python value_decomposition.py --line
+python analysis/value_decomposition_v1.5.py --line
 """
 # -------------------------------------------------------------------
 # AESTHETIC PRESETS

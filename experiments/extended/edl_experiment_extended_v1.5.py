@@ -1,4 +1,4 @@
-# -------------------- edl_experiment_extended.py --------------------
+# -------------------- edl_experiment_extended_v1.5.py --------------------
 """
 Extended EDL Experiment – exploiting ecosim v1.5 / v1.4 capabilities
 =====================================================================
