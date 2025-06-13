@@ -33,7 +33,7 @@ import pandas as pd
 import seaborn as sns
 from scipy import stats
 
-import ecosim                                  # v1.4+ or v1.5
+from src import ecosim_v1_5 as ecosim                                  # v1.4+ or v1.5
 # -------------------------------------------------------------------
 OUT = Path(".")
 
