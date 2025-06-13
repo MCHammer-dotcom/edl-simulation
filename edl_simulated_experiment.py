@@ -1,4 +1,4 @@
-# ----------------------- edl_simulated_experiment.py -----------------------
+# ---------------------- edl_simulated_experiment_v1.0.py ----------------------
 """
 Multi-Condition Simulated Field Experiment
 ==========================================

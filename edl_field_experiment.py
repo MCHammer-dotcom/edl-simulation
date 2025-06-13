@@ -1,4 +1,4 @@
-# ----------------------- edl_simulated_experiment.py -----------------------
+# ---------------------- edl_field_experiment_v1.0.py ----------------------
 """
 Multi-Condition Simulated Field Experiment
 ==========================================
@@ -21,8 +21,8 @@ Console     (ANOVA, Cohen d, tipping points, asymptote explanation)
 
 Usage
 -----
-$ python edl_simulated_experiment.py           # default four conditions
-$ python edl_simulated_experiment.py --conds Control Medium High  # subset
+$ python edl_field_experiment_v1.0.py           # default four conditions
+$ python edl_field_experiment_v1.0.py --conds Control Medium High  # subset
 
 Dependencies
 ------------
