@@ -1,4 +1,4 @@
-# ---------------------- edl_boosted_experiment.py ----------------------
+# --------------------- edl_boosted_experiment_v1.0.py ---------------------
 """
 Boosted-Productivity Experiment (bounded version)
 =================================================
