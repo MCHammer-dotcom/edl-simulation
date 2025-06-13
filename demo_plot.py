@@ -16,7 +16,7 @@ Usage
 try:
     import matplotlib.pyplot as plt
     import pandas as pd
-    import ecosim                     # assumes ecosim.py is in the same folder
+    from src import ecosim_v1_5 as ecosim
 except ModuleNotFoundError as e:
     print(
         "Missing a required package. Install with:\n"
