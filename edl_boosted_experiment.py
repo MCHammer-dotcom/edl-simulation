@@ -35,7 +35,7 @@ import pandas as pd
 import seaborn as sns
 from scipy import stats
 
-import ecosim                      # v1.3 or later
+from src import ecosim_v1_5 as ecosim
 # ---------------------------------------------------------------------
 OUTDIR = Path(".")
 

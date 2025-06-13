@@ -20,7 +20,7 @@ try:
     plt.style.use("seaborn-v0_8-muted")          # clean Nature-ish look
     import pandas as pd
     import argparse
-    import ecosim                               # ecosim.py must be in same dir
+    from src import ecosim_v1_5 as ecosim
 except ModuleNotFoundError:
     print("Missing package. Install with:\n"
           "    pip install matplotlib pandas networkx")

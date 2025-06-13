@@ -25,7 +25,7 @@ import pandas as pd
 import seaborn as sns
 from scipy import stats             # <-- keep module reference intact
 
-import ecosim                       # ecosim.py in same folder
+from src import ecosim_v1_5 as ecosim
 # --------------------------------------------------------------------------
 OUTDIR = Path(".")
 COMMON = dict(n_actors=50, n_steps=100, density=0.05, seed=123)
