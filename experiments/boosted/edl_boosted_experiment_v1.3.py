@@ -27,6 +27,7 @@ effect_sizes.csv, group_summary.csv, final_snapshot.csv, param_log.json
 # ---------------------------------------------------------------------
 import json
 from pathlib import Path
+import datetime
 
 import matplotlib.pyplot as plt
 plt.style.use("seaborn-v0_8-muted")
@@ -36,22 +37,19 @@ import seaborn as sns
 from scipy import stats
 
 from src import ecosim_v1_5 as ecosim
+from config.defaults import defaults
 # ---------------------------------------------------------------------
-OUT = Path("outputs")
-OUT.mkdir(exist_ok=True)
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+OUT = Path(f"outputs/{Path(__file__).stem}_{timestamp}")
+OUT.mkdir(parents=True, exist_ok=True)
 
 # Common parameters for *all* conditions (incl. new v1.3 controls)
-COMMON = dict(
+COMMON = defaults.copy()
+COMMON.update(dict(
     n_actors=50,
     n_steps=100,
     density=0.05,
-    seed=123,
-    gamma=0.08,
-    lam=0.05,
-    alpha=0.05,   # milder operant boost strength
-    beta=0.025,   # milder operand boost strength
-    R_cap=10.0    # bound the orchestrant stock
-)
+))
 
 # Condition-specific boost flags
 CONDITIONS = {

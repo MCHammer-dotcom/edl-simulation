@@ -25,6 +25,7 @@ Figures: value_trajectories.png, component_decomposition.png, delta_plot.png,
 # -------------------------------------------------------------------
 import json
 from pathlib import Path
+import datetime
 
 import matplotlib.pyplot as plt
 plt.style.use("seaborn-v0_8-muted")
@@ -34,12 +35,13 @@ import seaborn as sns
 from scipy import stats
 
 from src import ecosim_v1_5 as ecosim
+from config.defaults import defaults
 # -------------------------------------------------------------------
-OUT = Path("outputs")
-OUT.mkdir(exist_ok=True)
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+OUT = Path(f"outputs/{Path(__file__).stem}_{timestamp}")
+OUT.mkdir(parents=True, exist_ok=True)
 
-COMMON = dict(n_actors=100, n_steps=120, density=0.08, seed=123,
-              gamma=0.08, lam=0.05, alpha=0.05, beta=0.025, R_cap=10.0)
+COMMON = defaults.copy()
 
 CONDITIONS = {
     "Baseline-Control": {},

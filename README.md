@@ -24,6 +24,19 @@ from src import ecosim_v1_5 as ecosim
 python demos/demo_plot.py
 ```
 
+## How to Run Experiments
+
+Run any experiment from the repository root. Example:
+
+```bash
+cd edl-simulation
+python experiments/extended/edl_experiment_extended_v1.5.py
+```
+
+Each execution creates a time-stamped folder under `outputs/` named after the
+script, e.g. `outputs/edl_experiment_extended_v1.5_20240101_120000/`. All CSV
+tables and figures are saved there.
+
 ## Running Experiments
 
 Execute any experiment from the repository root. Examples:
