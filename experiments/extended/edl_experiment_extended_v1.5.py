@@ -23,6 +23,10 @@ Figures: value_trajectories.png, component_decomposition.png, delta_plot.png,
          rho_volatility.png
 """
 # -------------------------------------------------------------------
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
+
 import json
 from pathlib import Path
 import datetime
