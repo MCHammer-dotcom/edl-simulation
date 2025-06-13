@@ -1,33 +1,39 @@
 # edl-simulation
 Simulation for Ecosystem-Dominant Logic (EDL)
 
-## Running the Demo
+## Project Layout
 
-The core simulation code now lives in `src/` as `ecosim_v1_5.py`.  The
-experiment scripts import it via:
+```
+src/                      # ecosim_v1_5.py engine
+experiments/field/        # field experiments
+experiments/boosted/      # productivity boost experiment
+experiments/extended/     # extended experiment
+analysis/                 # value analysis scripts
+demos/                    # quick demo scripts
+```
+
+All scripts import the engine via:
 
 ```python
 from src import ecosim_v1_5 as ecosim
 ```
 
-Run the demo plot with:
+## Running the Demo
 
-```bash
-python demo_plot.py
+```
+python demos/demo_plot.py
 ```
 
 ## Running Experiments
 
-Each experiment script can be executed directly from the repository root.
-Examples:
+Execute any experiment from the repository root. Examples:
 
-```bash
-python edl_boosted_experiment.py
-python edl_simulated_experiment.py
-python edl_field_experiment.py
-python edl_experiment_extended.py
-python value_decomposition.py
+```
+python experiments/boosted/edl_boosted_experiment_v1.3.py
+python experiments/field/edl_field_experiment_v1.0.py
+python experiments/field/edl_simulated_experiment_v1.1.py
+python experiments/extended/edl_experiment_extended_v1.5.py
+python analysis/value_decomposition_v1.5.py
 ```
 
-Ensure all required packages (pandas, matplotlib, seaborn, numpy, scipy) are
-installed.
+Ensure all required packages (pandas, matplotlib, seaborn, numpy, scipy) are installed.

@@ -1,34 +1,18 @@
-# ---------------------- edl_field_experiment_v1.0.py ----------------------
+# ---------------------- edl_simulated_experiment_v1.1.py ----------------------
 """
 Multi-Condition Simulated Field Experiment
 ==========================================
 
-Benchmarks four orchestrant-resource conditions in the Ecosystem-Dominant
-Logic (EDL) model:
+Benchmarks four orchestrant-resource conditions:
 
-1. Control/Low (γ = 0.02, λ = 0.01)            – constant low access  
-2. Medium       (γ = 0.05, λ = 0.03)            – constant medium access  
-3. High         (γ = 0.08, λ = 0.05)            – constant high access  
-4. Dynamic Onset: low until t=50, then logistic ramp to high  
-   γ(t), λ(t) = low + (high−low)/(1 + e^{−k(t−t₀)}) with k = 0.25, t₀ = 50
+1. Control  (Low γ, λ)
+2. Medium   (Mid γ, λ)
+3. High     (High γ, λ)
+4. Dynamic  (sigmoid ramp from low to high at t₀ = 50)
 
-Outputs
--------
-PNG charts (300 dpi, Nature column width)  
-CSV tables  (group_summary.csv, final_snapshot.csv, effect_sizes.csv)  
-JSON        (param_log.json)  
-Console     (ANOVA, Cohen d, tipping points, asymptote explanation)
-
-Usage
------
-$ python edl_field_experiment_v1.0.py           # default four conditions
-$ python edl_field_experiment_v1.0.py --conds Control Medium High  # subset
-
-Dependencies
-------------
-numpy, pandas, matplotlib, seaborn, scipy     (statsmodels optional)
+Corrected version: avoids variable shadowing of `scipy.stats` and
+uses `stats.f_oneway` for ANOVA.
 """
-
 # --------------------------------------------------------------------------
 import argparse
 import json
@@ -39,25 +23,20 @@ plt.style.use("seaborn-v0_8-muted")
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from scipy import stats
+from scipy import stats             # <-- keep module reference intact
 
 from src import ecosim_v1_5 as ecosim
 # --------------------------------------------------------------------------
 OUTDIR = Path(".")
 COMMON = dict(n_actors=50, n_steps=100, density=0.05, seed=123)
 
-# Orchestrant parameter schedule per condition ------------------------------
+# Condition specifications ---------------------------------------------------
 LOW   = dict(gamma=0.02, lam=0.01)
 MED   = dict(gamma=0.05, lam=0.03)
 HIGH  = dict(gamma=0.08, lam=0.05)
-DYN   = dict(low=LOW, high=HIGH, k=0.25, t0=50)  # sigmoid ramp spec
+DYN   = dict(low=LOW, high=HIGH, k=0.25, t0=50)  # sigmoid spec
 
-CONDITIONS = {
-    "Control": LOW,
-    "Medium" : MED,
-    "High"   : HIGH,
-    "Dynamic": DYN,
-}
+CONDITIONS = {"Control": LOW, "Medium": MED, "High": HIGH, "Dynamic": DYN}
 # --------------------------------------------------------------------------
 
 
@@ -66,25 +45,17 @@ def sigmoid(t, low, high, k=0.25, t0=50):
     return low + (high - low) / (1 + np.exp(-k * (t - t0)))
 
 
-# ---------- Single-condition runner ----------------------------------------
 def run_condition(name: str, spec: dict) -> pd.DataFrame:
-    """
-    Run ecosim under specified orchestrant parameters.
-    For 'Dynamic', post-hoc scale orchestrant_value using logistic γ(t)+λ(t).
-    """
-    df = ecosim.run_simulation(**COMMON, **LOW)  # always start with LOW
+    """Run ecosim under specified orchestrant parameters."""
+    df = ecosim.run_simulation(**COMMON, **LOW)  # start from LOW baseline
     df["group"] = name
 
     if name != "Dynamic":
-        if not np.isclose(spec["gamma"], LOW["gamma"]) or not np.isclose(
-            spec["lam"], LOW["lam"]
-        ):
-            # scale orchestrant contribution proportionally
-            factor = (spec["gamma"] + spec["lam"]) / (LOW["gamma"] + LOW["lam"])
+        factor = (spec["gamma"] + spec["lam"]) / (LOW["gamma"] + LOW["lam"])
+        if not np.isclose(factor, 1.0):
             df["orchestrant_value"] *= factor
             df["total_value"] += (factor - 1) * df["orchestrant_value"] / factor
     else:
-        # dynamic logistic ramp
         t = df["time"].values
         γt = sigmoid(t, LOW["gamma"], HIGH["gamma"], k=spec["k"], t0=spec["t0"])
         λt = sigmoid(t, LOW["lam"], HIGH["lam"], k=spec["k"], t0=spec["t0"])
@@ -94,7 +65,6 @@ def run_condition(name: str, spec: dict) -> pd.DataFrame:
     return df
 
 
-# ---------- Stats helpers ---------------------------------------------------
 def summarise(df: pd.DataFrame) -> pd.DataFrame:
     grp = (
         df.groupby(["group", "time"])[
@@ -116,19 +86,13 @@ def effect_size(a, b) -> float:
     return (a.mean() - b.mean()) / np.sqrt((a.var(ddof=1) + b.var(ddof=1)) / 2)
 
 
-# ---------- Plotting functions ---------------------------------------------
-def plot_trajectories(stats: pd.DataFrame, conds: list[str]):
+# -------------------- plotting helpers -------------------------------------
+def plot_trajectories(stats_df: pd.DataFrame, conds: list[str]):
     plt.figure(figsize=(7.1, 4.5))
     palette = sns.color_palette("Set2", n_colors=len(conds))
     for col, c in zip(palette, conds):
-        sub = stats[stats["group"] == c]
-        plt.plot(
-            sub["time"],
-            sub["total_value_mean"],
-            label=c,
-            color=col,
-            linewidth=2,
-        )
+        sub = stats_df[stats_df["group"] == c]
+        plt.plot(sub["time"], sub["total_value_mean"], label=c, color=col, linewidth=2)
     plt.xlabel("Time")
     plt.ylabel("Mean Total Value")
     plt.title("Total Value Trajectories Across Conditions")
@@ -138,11 +102,11 @@ def plot_trajectories(stats: pd.DataFrame, conds: list[str]):
     plt.close()
 
 
-def plot_delta(stats: pd.DataFrame, conds: list[str]):
-    ctrl = stats[stats["group"] == "Control"].set_index("time")
+def plot_delta(stats_df: pd.DataFrame, conds: list[str]):
+    ctrl = stats_df[stats_df["group"] == "Control"].set_index("time")
     plt.figure(figsize=(7.1, 4.5))
     for c in [k for k in conds if k != "Control"]:
-        sub = stats[stats["group"] == c].set_index("time")
+        sub = stats_df[stats_df["group"] == c].set_index("time")
         delta = sub["total_value_mean"] - ctrl["total_value_mean"]
         plt.plot(delta.index, delta, label=f"{c} − Control", linewidth=2)
     plt.xlabel("Time")
@@ -155,11 +119,11 @@ def plot_delta(stats: pd.DataFrame, conds: list[str]):
     plt.close()
 
 
-def plot_component_shares(stats: pd.DataFrame, conds: list[str]):
+def plot_component_shares(stats_df: pd.DataFrame, conds: list[str]):
     fig, axs = plt.subplots(1, len(conds), figsize=(10, 4.5), sharey=True)
     palette = ["#1f77b4", "#2ca02c", "#ff7f0e"]
     for ax, c in zip(axs, conds):
-        sub = stats[stats["group"] == c]
+        sub = stats_df[stats_df["group"] == c]
         ax.stackplot(
             sub["time"],
             sub["operand_value_mean"],
@@ -181,9 +145,7 @@ def plot_component_shares(stats: pd.DataFrame, conds: list[str]):
 
 def plot_final_distribution(df_final: pd.DataFrame):
     plt.figure(figsize=(7.1, 4.5))
-    sns.violinplot(
-        data=df_final, x="group", y="total_value", palette="Set2", inner="box"
-    )
+    sns.violinplot(data=df_final, x="group", y="total_value", palette="Set2", inner="box")
     plt.ylabel("Final V_i(T)")
     plt.title("Final Actor Value Distribution")
     plt.tight_layout()
@@ -191,16 +153,16 @@ def plot_final_distribution(df_final: pd.DataFrame):
     plt.close()
 
 
-# ---------- CLI + main ------------------------------------------------------
+# -------------------- main experiment --------------------------------------
 def main(conds: list[str]):
     print("Running conditions:", ", ".join(conds))
     dfs = [run_condition(c, CONDITIONS[c]) for c in conds]
     df_all = pd.concat(dfs, ignore_index=True)
 
-    stats = summarise(df_all)
-    stats.to_csv(OUTDIR / "group_summary.csv", index=False)
+    stats_df = summarise(df_all)
+    stats_df.to_csv(OUTDIR / "group_summary.csv", index=False)
 
-    # Effect sizes & one-way ANOVA on final total value ---------------------
+    # Effect sizes and ANOVA -------------------------------------------------
     final = df_all[df_all["time"] == COMMON["n_steps"] - 1]
     effect_rows = []
     for c in conds:
@@ -211,14 +173,13 @@ def main(conds: list[str]):
             final.loc[final["group"] == "Control", "total_value"],
         )
         effect_rows.append({"comparison": f"{c} vs Control", "cohens_d": d})
-    eff_df = pd.DataFrame(effect_rows)
-    eff_df.to_csv(OUTDIR / "effect_sizes.csv", index=False)
+    pd.DataFrame(effect_rows).to_csv(OUTDIR / "effect_sizes.csv", index=False)
 
     groups = [final.loc[final["group"] == c, "total_value"] for c in conds]
-    f_stat, p_val = stats.anova.f_oneway(*groups)
+    f_stat, p_val = stats.f_oneway(*groups)        # <-- corrected call
     print(f"\nOne-way ANOVA on V_i(T): F={f_stat:.2f}, p={p_val:.3g}")
 
-    # Percent component shares at final time -------------------------------
+    # Component share at T
     share = (
         final.groupby("group")[["operand_value", "operant_value", "orchestrant_value"]]
         .mean()
@@ -226,34 +187,33 @@ def main(conds: list[str]):
     )
     print("\nComponent share at T (mean %, rounded):\n", share.round(1))
 
-    # Save final snapshot
     final.to_csv(OUTDIR / "final_snapshot.csv", index=False)
 
-    # Parameter log
+    # Save param log
     with open(OUTDIR / "param_log.json", "w") as f:
         json.dump({**COMMON, **CONDITIONS}, f, indent=2)
 
     # Plots
-    plot_trajectories(stats, conds)
-    plot_delta(stats, conds)
-    plot_component_shares(stats, conds)
+    plot_trajectories(stats_df, conds)
+    plot_delta(stats_df, conds)
+    plot_component_shares(stats_df, conds)
     plot_final_distribution(final)
 
-    print("\nData & figures saved to working directory.")
-    print("\nAsymptote note: Curves flatten because the externality-driven "
-          "orchestrant stock R_t approaches a bounded equilibrium while "
-          "operant uniqueness erodes (ε > 0), limiting further growth.")
+    print("\nData & figures saved. Asymptote note: Curves flatten as "
+          "externality-driven orchestrant stock approaches equilibrium "
+          "and operant uniqueness erodes (ε > 0).")
 
 
+# -------------------- CLI ---------------------------------------------------
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         description="Run multi-condition orchestrant experiment."
     )
-    ap.add_argument(
+    parser.add_argument(
         "--conds",
         nargs="+",
         default=list(CONDITIONS.keys()),
-        help=f"Subset of conditions (default all: {list(CONDITIONS.keys())})",
+        help="Subset of conditions to run",
     )
-    args = ap.parse_args()
+    args = parser.parse_args()
     main(args.conds)
