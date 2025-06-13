@@ -33,6 +33,7 @@ numpy, pandas, matplotlib, seaborn, scipy     (statsmodels optional)
 import argparse
 import json
 from pathlib import Path
+import datetime
 
 import matplotlib.pyplot as plt
 plt.style.use("seaborn-v0_8-muted")
@@ -42,10 +43,13 @@ import seaborn as sns
 from scipy import stats
 
 from src import ecosim_v1_5 as ecosim
+from config.defaults import defaults
 # --------------------------------------------------------------------------
-OUT = Path("outputs")
-OUT.mkdir(exist_ok=True)
-COMMON = dict(n_actors=50, n_steps=100, density=0.05, seed=123)
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+OUT = Path(f"outputs/{Path(__file__).stem}_{timestamp}")
+OUT.mkdir(parents=True, exist_ok=True)
+COMMON = defaults.copy()
+COMMON.update(dict(n_actors=50, n_steps=100, density=0.05))
 
 # Orchestrant parameter schedule per condition ------------------------------
 LOW   = dict(gamma=0.02, lam=0.01)
