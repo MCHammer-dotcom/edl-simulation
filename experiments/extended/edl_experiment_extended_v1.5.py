@@ -35,7 +35,8 @@ from scipy import stats
 
 from src import ecosim_v1_5 as ecosim
 # -------------------------------------------------------------------
-OUT = Path(".")
+OUT = Path("outputs")
+OUT.mkdir(exist_ok=True)
 
 COMMON = dict(n_actors=100, n_steps=120, density=0.08, seed=123,
               gamma=0.08, lam=0.05, alpha=0.05, beta=0.025, R_cap=10.0)
@@ -220,4 +221,4 @@ if vol_track is not None:
     print(f"\nVolatility mean={vol_track.mean():.3f}  "
           f"ρ_t range=({rho_track.min():.2f}–{rho_track.max():.2f})")
 
-print("\nAll tables and figures saved to working directory.")
+print(f"\nAll tables and figures saved to {OUT.resolve()}")
